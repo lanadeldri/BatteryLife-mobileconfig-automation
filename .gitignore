@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+monitor.log
+
+# Local Apple browser profile and auth state should never be committed.
+monitor_data/apple_profile/
+monitor_data/auth_state.json
+
+# Download archives can get large and are only needed locally.
+monitor_data/downloads/
+monitor_data/BatteryLife.mobileconfig
