@@ -62,6 +62,19 @@ Run:
 python3 battery_life_monitor.py
 ```
 
+Test commands:
+
+```bash
+python3 battery_life_monitor.py -test -run
+python3 battery_life_monitor.py -test -loginexpie
+```
+
+`-test -run` does one real download check and sends a test email without updating
+`monitor_data/state.json`.
+
+`-test -loginexpie` sends a simulated Apple-login-expired test email so you can
+verify that alert format too.
+
 Example email outcomes:
 
 - First run: `New BatteryLife.mobileconfig detected`, current MD5 set, previous MD5 `None`

@@ -84,6 +84,25 @@ def parse_args() -> argparse.Namespace:
         default=120,
         help="Timeout for Apple page interactions.",
     )
+    parser.add_argument(
+        "-test",
+        "--test",
+        action="store_true",
+        help="Run in test mode so email subjects and bodies are clearly marked as tests.",
+    )
+    parser.add_argument(
+        "-run",
+        "--run",
+        action="store_true",
+        help="With test mode, run one real download check and send a test status email.",
+    )
+    parser.add_argument(
+        "-loginexpire",
+        "-loginexpie",
+        "--loginexpire",
+        action="store_true",
+        help="With test mode, send a test Apple-login-expired email.",
+    )
     return parser.parse_args()
 
 
@@ -306,6 +325,10 @@ def build_status_subject(changed: bool, first_run: bool) -> str:
     return "No new BatteryLife.mobileconfig detected"
 
 
+def test_label(is_test: bool) -> str:
+    return "[TEST] " if is_test else ""
+
+
 def build_status_body(
     *,
     current_md5: str | None,
@@ -313,6 +336,7 @@ def build_status_body(
     changed: bool,
     first_run: bool,
     archive_path: Path | None,
+    is_test: bool = False,
 ) -> str:
     if first_run:
         headline = "New BatteryLife.mobileconfig detected"
@@ -332,14 +356,22 @@ def build_status_body(
     if archive_path is not None:
         lines.append(f"Saved file: {archive_path}")
 
+    if is_test:
+        lines.extend(
+            [
+                "",
+                "Test mode only: this email was triggered manually.",
+            ]
+        )
+
     return "\n".join(lines)
 
 
-def build_auth_failure_subject() -> str:
-    return "BatteryLife.mobileconfig Apple login expired"
+def build_auth_failure_subject(*, is_test: bool = False) -> str:
+    return f"{test_label(is_test)}BatteryLife.mobileconfig Apple login expired"
 
 
-def build_auth_failure_body(config: Config, reason: str) -> str:
+def build_auth_failure_body(config: Config, reason: str, *, is_test: bool = False) -> str:
     lines = [
         "BatteryLife.mobileconfig check could not run because the saved Apple login is no longer valid.",
         "",
@@ -353,6 +385,14 @@ def build_auth_failure_body(config: Config, reason: str) -> str:
     state_file = auth_state_path(config)
     if state_file.exists():
         lines.append(f"Saved auth state file: {state_file}")
+
+    if is_test:
+        lines.extend(
+            [
+                "",
+                "Test mode only: this email was triggered manually.",
+            ]
+        )
 
     return "\n".join(lines)
 
@@ -384,10 +424,53 @@ def send_email(config: Config, subject: str, body: str) -> None:
         smtp.send_message(message)
 
 
-def notify_auth_failure(config: Config, reason: str) -> None:
-    subject = build_auth_failure_subject()
-    body = build_auth_failure_body(config, reason)
+def notify_auth_failure(config: Config, reason: str, *, is_test: bool = False) -> None:
+    subject = build_auth_failure_subject(is_test=is_test)
+    body = build_auth_failure_body(config, reason, is_test=is_test)
     send_email(config, subject, body)
+
+
+def send_test_run_email(config: Config) -> None:
+    ensure_dirs(config)
+    ensure_auth_state_from_env(config)
+    previous_state = load_state(config)
+    previous_md5 = previous_state.get("current_md5")
+
+    content = download_profile(config)
+    current_md5 = md5_hex(content)
+    first_run = previous_md5 is None
+    changed = previous_md5 != current_md5
+    subject = f"{test_label(True)}{build_status_subject(changed=changed, first_run=first_run)}"
+    body = build_status_body(
+        current_md5=current_md5,
+        previous_md5=previous_md5,
+        changed=changed,
+        first_run=first_run,
+        archive_path=None,
+        is_test=True,
+    )
+    send_email(config, subject, body)
+    print(subject)
+    print(body)
+
+
+def run_test_mode(config: Config, args: argparse.Namespace) -> int:
+    if args.run and args.loginexpire:
+        raise MonitorError("Choose only one test action: -run or -loginexpire.")
+    if not args.run and not args.loginexpire:
+        raise MonitorError("Test mode requires one action: -run or -loginexpire.")
+
+    if args.run:
+        send_test_run_email(config)
+        return 0
+
+    notify_auth_failure(
+        config,
+        "Test mode requested a simulated Apple login expiration.",
+        is_test=True,
+    )
+    print(build_auth_failure_subject(is_test=True))
+    return 0
 
 
 def run_monitor(config: Config) -> None:
@@ -417,13 +500,14 @@ def run_monitor(config: Config) -> None:
     }
     save_state(config, new_state)
 
-    subject = build_status_subject(changed=changed, first_run=first_run)
+    subject = f"{test_label(False)}{build_status_subject(changed=changed, first_run=first_run)}"
     body = build_status_body(
         current_md5=current_md5,
         previous_md5=previous_md5,
         changed=changed,
         first_run=first_run,
         archive_path=archive_path,
+        is_test=False,
     )
     send_email(config, subject, body)
 
@@ -436,6 +520,9 @@ def main() -> int:
     try:
         config = load_config(args)
         ensure_dirs(config)
+
+        if args.test:
+            return run_test_mode(config, args)
 
         if args.login:
             perform_login(config)
